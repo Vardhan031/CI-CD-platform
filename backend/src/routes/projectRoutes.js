@@ -6,6 +6,10 @@ const {
   updateProject,
   deleteProject,
 } = require('../controllers/projectController');
+const {
+  triggerDeployment,
+  getProjectDeployments,
+} = require('../controllers/deploymentController');
 const { protect } = require('../middleware/authMiddleware');
 const { authorize } = require('../middleware/rbacMiddleware');
 
@@ -24,5 +28,9 @@ router
   .get(getProjectById)
   .put(authorize('ADMIN', 'DEVELOPER'), updateProject)
   .delete(authorize('ADMIN', 'DEVELOPER'), deleteProject);
+
+// Project deployment endpoints
+router.get('/:projectId/deployments', getProjectDeployments);
+router.post('/:projectId/deploy', authorize('ADMIN', 'DEVELOPER'), triggerDeployment);
 
 module.exports = router;

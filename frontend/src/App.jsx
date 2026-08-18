@@ -7,6 +7,8 @@ import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
+import Deployments from './pages/Deployments';
+import DeploymentDetail from './pages/DeploymentDetail';
 import Login from './pages/Login';
 import Register from './pages/Register';
 
@@ -21,12 +23,8 @@ function AuthenticatedLayout() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:id" element={<ProjectDetail />} />
-            <Route path="/deployments" element={
-              <div className="p-6 bg-slate-900/40 border border-slate-800 rounded-xl space-y-2">
-                <h2 className="text-xl font-bold text-slate-100">Deployments History</h2>
-                <p className="text-slate-400 text-sm">Track real-time build logs, versioning, and status.</p>
-              </div>
-            } />
+            <Route path="/deployments" element={<Deployments />} />
+            <Route path="/deployments/:id" element={<DeploymentDetail />} />
           </Routes>
         </main>
       </div>
