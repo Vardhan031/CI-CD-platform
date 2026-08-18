@@ -1,0 +1,35 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: cicd_mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: cicd_platform
+    volumes:
+      - mongo_data:/data/db
+
+  backend:
+    build: ./backend
+    container_name: cicd_backend
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - MONGO_URI=mongodb://mongodb:27017/cicd_platform
+      - JWT_SECRET=super_secret_jwt_key_change_in_production
+      - NODE_ENV=development
+    depends_on:
+      - mongodb
+
+  frontend:
+    build: ./frontend
+    container_name: cicd_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:
