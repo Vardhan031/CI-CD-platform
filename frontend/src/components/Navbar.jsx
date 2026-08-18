@@ -1,7 +1,10 @@
 import React from 'react';
-import { Terminal, Shield, Bell, User } from 'lucide-react';
+import { Terminal, Bell, LogOut, User as UserIcon } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 export default function Navbar() {
+  const { user, logout } = useAuth();
+
   return (
     <header className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-40 px-6 flex items-center justify-between">
       {/* Brand / Logo */}
@@ -27,20 +30,33 @@ export default function Navbar() {
           <span>System Healthy</span>
         </div>
 
-        <button className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors">
-          <Bell size={18} />
-        </button>
-
-        {/* User Pill Placeholder */}
-        <div className="flex items-center space-x-3 pl-2 border-l border-slate-800">
-          <div className="w-8 h-8 rounded-full bg-cyan-600/20 text-cyan-400 border border-cyan-500/30 flex items-center justify-center font-bold text-sm">
-            D
+        {/* User Pill & Logout */}
+        {user ? (
+          <div className="flex items-center space-x-3 pl-3 border-l border-slate-800">
+            <div className="w-8 h-8 rounded-full bg-cyan-600/20 text-cyan-400 border border-cyan-500/30 flex items-center justify-center font-bold text-sm">
+              {user.name ? user.name.charAt(0).toUpperCase() : 'U'}
+            </div>
+            <div className="hidden sm:block text-left text-xs">
+              <p className="font-semibold text-slate-200">{user.name}</p>
+              <span className={`font-mono text-[10px] px-1.5 py-0.2 rounded border ${
+                user.role === 'ADMIN'
+                  ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                  : user.role === 'DEVELOPER'
+                  ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
+                  : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+              }`}>
+                {user.role}
+              </span>
+            </div>
+            <button
+              onClick={logout}
+              title="Logout"
+              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors ml-1"
+            >
+              <LogOut size={16} />
+            </button>
           </div>
-          <div className="hidden sm:block text-left text-xs">
-            <p className="font-semibold text-slate-200">DevOps Engineer</p>
-            <p className="text-slate-400 font-mono text-[10px]">ADMIN</p>
-          </div>
-        </div>
+        ) : null}
       </div>
     </header>
   );
