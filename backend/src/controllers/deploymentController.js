@@ -2,6 +2,7 @@ const Deployment = require('../models/Deployment');
 const Build = require('../models/Build');
 const DeploymentLog = require('../models/DeploymentLog');
 const Project = require('../models/Project');
+const jenkinsService = require('../services/jenkinsService');
 const mongoose = require('mongoose');
 
 const inMemoryDeployments = new Map();
@@ -53,17 +54,29 @@ const triggerDeployment = async (req, res, next) => {
       const version = `v1.0.${buildNumber - 1}`;
       const startedAt = new Date();
 
+      // Trigger Jenkins Job via REST API
+      const jenkinsRes = await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+        PROJECT_ID: project._id.toString(),
+        PROJECT_NAME: project.name,
+        REPO_URL: project.repositoryUrl,
+        BRANCH: project.branch || 'main',
+        DOCKERFILE_PATH: project.dockerfilePath || 'Dockerfile',
+        PORT: project.port,
+        VERSION: version,
+        BUILD_NUMBER: buildNumber,
+      });
+
       const deployment = await Deployment.create({
         project: projectId,
         version,
         commitHash: Math.random().toString(16).substring(2, 9),
         branch: project.branch || 'main',
-        status: 'SUCCESS', // Automated pipeline success
+        status: 'SUCCESS',
         triggeredBy: req.user?.id,
         triggerType,
         buildNumber,
         startedAt,
-        completedAt: new Date(startedAt.getTime() + 12000), // 12 sec duration
+        completedAt: new Date(startedAt.getTime() + 12000),
         duration: 12,
       });
 
@@ -111,6 +124,17 @@ const triggerDeployment = async (req, res, next) => {
       const version = `v1.0.${buildNumber - 1}`;
       const startedAt = new Date().toISOString();
       const mockDepId = `dep_${Date.now()}`;
+
+      // Trigger Jenkins API Job
+      await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+        PROJECT_ID: projectId,
+        PROJECT_NAME: project.name,
+        REPO_URL: project.repositoryUrl,
+        BRANCH: project.branch || 'main',
+        PORT: project.port,
+        VERSION: version,
+        BUILD_NUMBER: buildNumber,
+      });
 
       const mockDeployment = {
         _id: mockDepId,
