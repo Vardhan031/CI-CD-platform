@@ -3,6 +3,7 @@ const Build = require('../models/Build');
 const DeploymentLog = require('../models/DeploymentLog');
 const Project = require('../models/Project');
 const jenkinsService = require('../services/jenkinsService');
+const { verifyApplicationHealth } = require('../services/healthCheckService');
 const mongoose = require('mongoose');
 const { inMemoryProjects, inMemoryDeployments, inMemoryBuilds, inMemoryLogs } = require('../utils/devStore');
 
@@ -337,6 +338,22 @@ const rollbackDeployment = async (req, res, next) => {
       const deploymentCount = await Deployment.countDocuments({ project: project._id });
       const newBuildNumber = deploymentCount + 1;
       const rollbackVersion = `${targetDeployment.version}-rollback.${newBuildNumber}`;
+      const startedAt = new Date();
+
+      // Trigger Jenkins Rollback Build
+      await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+        PROJECT_ID: project._id.toString(),
+        PROJECT_NAME: project.name,
+        REPO_URL: project.repositoryUrl,
+        BRANCH: targetDeployment.branch,
+        PORT: project.port,
+        VERSION: rollbackVersion,
+        BUILD_NUMBER: newBuildNumber,
+        IS_ROLLBACK: 'true',
+      });
+
+      // Verify Application Container Health
+      const healthResult = await verifyApplicationHealth(project.port);
 
       const rollbackDeploymentRecord = await Deployment.create({
         project: project._id,
@@ -347,9 +364,30 @@ const rollbackDeployment = async (req, res, next) => {
         triggeredBy: req.user?.id,
         triggerType: 'MANUAL',
         buildNumber: newBuildNumber,
-        startedAt: new Date(),
+        startedAt,
         completedAt: new Date(),
         duration: 5,
+      });
+
+      const logs = `[Rollback Engine] Initiated rollback to image version ${targetDeployment.version}
+[Pipeline] Deploying container version ${rollbackVersion} on port ${project.port}
+[Health Check] ${healthResult.message}
+[Rollback Result] SUCCESS - Active version updated to ${rollbackVersion}`;
+
+      await Build.create({
+        deployment: rollbackDeploymentRecord._id,
+        buildNumber: newBuildNumber,
+        status: 'SUCCESS',
+        logs,
+        startedAt,
+        completedAt: rollbackDeploymentRecord.completedAt,
+      });
+
+      await DeploymentLog.create({
+        deployment: rollbackDeploymentRecord._id,
+        action: 'ROLLBACK',
+        message: `Rolled back to ${targetDeployment.version} as ${rollbackVersion}`,
+        user: req.user?.id,
       });
 
       project.currentVersion = rollbackVersion;
@@ -360,6 +398,7 @@ const rollbackDeployment = async (req, res, next) => {
         success: true,
         message: `Rolled back to image version ${targetDeployment.version} as ${rollbackVersion}`,
         deployment: rollbackDeploymentRecord,
+        health: healthResult,
       });
     } else {
       const targetDeployment = inMemoryDeployments.get(id);
@@ -367,11 +406,30 @@ const rollbackDeployment = async (req, res, next) => {
         return res.status(404).json({ success: false, message: 'Target deployment not found' });
       }
 
-      const { inMemoryProjects } = require('./projectController');
       const project = inMemoryProjects.get(targetDeployment.project);
+      if (!project) {
+        return res.status(404).json({ success: false, message: 'Associated project not found' });
+      }
 
-      const rollbackVersion = `${targetDeployment.version}-rollback`;
+      const existingDeployments = Array.from(inMemoryDeployments.values()).filter(
+        (d) => d.project === targetDeployment.project
+      );
+      const newBuildNumber = existingDeployments.length + 1;
+      const rollbackVersion = `${targetDeployment.version}-rollback.${newBuildNumber}`;
       const mockDepId = `dep_${Date.now()}`;
+
+      await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+        PROJECT_ID: targetDeployment.project,
+        PROJECT_NAME: project.name,
+        REPO_URL: project.repositoryUrl,
+        BRANCH: targetDeployment.branch,
+        PORT: project.port,
+        VERSION: rollbackVersion,
+        BUILD_NUMBER: newBuildNumber,
+        IS_ROLLBACK: 'true',
+      });
+
+      const healthResult = await verifyApplicationHealth(project.port);
 
       const mockRollback = {
         _id: mockDepId,
@@ -383,22 +441,37 @@ const rollbackDeployment = async (req, res, next) => {
         status: 'SUCCESS',
         triggeredBy: req.user?.id,
         triggerType: 'MANUAL',
-        buildNumber: Date.now(),
+        buildNumber: newBuildNumber,
         startedAt: new Date().toISOString(),
         duration: 5,
+        createdAt: new Date().toISOString(),
+      };
+
+      const logs = `[Rollback Engine] Initiated rollback to image version ${targetDeployment.version}
+[Pipeline] Deploying container version ${rollbackVersion} on port ${project.port}
+[Health Check] ${healthResult.message}
+[Rollback Result] SUCCESS - Active version updated to ${rollbackVersion}`;
+
+      const mockBuild = {
+        _id: `build_${Date.now()}`,
+        deployment: mockDepId,
+        buildNumber: newBuildNumber,
+        status: 'SUCCESS',
+        logs,
       };
 
       inMemoryDeployments.set(mockDepId, mockRollback);
-      if (project) {
-        project.currentVersion = rollbackVersion;
-        project.status = 'DEPLOYED';
-        inMemoryProjects.set(targetDeployment.project, project);
-      }
+      inMemoryBuilds.set(mockDepId, mockBuild);
+
+      project.currentVersion = rollbackVersion;
+      project.status = 'DEPLOYED';
+      inMemoryProjects.set(targetDeployment.project, project);
 
       return res.status(200).json({
         success: true,
         message: `Rolled back to version ${targetDeployment.version} as ${rollbackVersion} (In-Memory Dev Mode)`,
         deployment: mockRollback,
+        health: healthResult,
       });
     }
   } catch (error) {
