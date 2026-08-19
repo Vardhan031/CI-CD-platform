@@ -2,9 +2,7 @@ const User = require('../models/User');
 const generateToken = require('../utils/generateToken');
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
-
-// In-memory fallback user store for local development when MongoDB is offline
-const inMemoryUsers = new Map();
+const { inMemoryUsers } = require('../utils/devStore');
 
 // Helper to check DB connection
 const isDbConnected = () => mongoose.connection.readyState === 1;

@@ -1,8 +1,6 @@
 const Project = require('../models/Project');
 const mongoose = require('mongoose');
-
-// In-memory fallback store for offline development
-const inMemoryProjects = new Map();
+const { inMemoryProjects } = require('../utils/devStore');
 
 const isDbConnected = () => mongoose.connection.readyState === 1;
 

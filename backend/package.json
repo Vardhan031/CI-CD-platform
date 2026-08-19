@@ -10,7 +10,8 @@
     "test:project": "node src/tests/projectTest.js",
     "test:deploy": "node src/tests/deploymentTest.js",
     "test:jenkins": "node src/tests/jenkinsTest.js",
-    "test:pipeline": "node src/tests/pipelineTest.js"
+    "test:pipeline": "node src/tests/pipelineTest.js",
+    "test:webhook": "node src/tests/webhookTest.js"
   },
   "dependencies": {
     "axios": "^1.7.9",

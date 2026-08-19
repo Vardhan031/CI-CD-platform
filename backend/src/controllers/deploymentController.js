@@ -4,10 +4,7 @@ const DeploymentLog = require('../models/DeploymentLog');
 const Project = require('../models/Project');
 const jenkinsService = require('../services/jenkinsService');
 const mongoose = require('mongoose');
-
-const inMemoryDeployments = new Map();
-const inMemoryBuilds = new Map();
-const inMemoryLogs = new Map();
+const { inMemoryProjects, inMemoryDeployments, inMemoryBuilds, inMemoryLogs } = require('../utils/devStore');
 
 const isDbConnected = () => mongoose.connection.readyState === 1;
 

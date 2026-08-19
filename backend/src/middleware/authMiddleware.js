@@ -17,7 +17,7 @@ const protect = async (req, res, next) => {
         req.user = await User.findById(decoded.id).select('-password');
       } else {
         // Fallback for decoded token when MongoDB is offline
-        const { inMemoryUsers } = require('../controllers/authController');
+        const { inMemoryUsers } = require('../utils/devStore');
         const user = inMemoryUsers.get(decoded.id);
         if (user) {
           req.user = {
