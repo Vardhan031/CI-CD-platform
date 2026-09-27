@@ -82,6 +82,35 @@ const triggerJenkinsJob = async (jobName = 'cicd-deploy-pipeline', params = {}) 
 };
 
 /**
+ * Get all builds for a Jenkins job
+ * @param {string} jobName Name of Jenkins job
+ */
+const getJenkinsJobBuilds = async (jobName = 'cicd-deploy-pipeline') => {
+  try {
+    const jobUrl = `${jenkinsConfig.url}/job/${jobName}/api/json?tree=name,url,builds[number,url,building,result,duration,timestamp]`;
+    const response = await axios.get(jobUrl, {
+      headers: jenkinsConfig.getAuthHeader(),
+      timeout: 4000,
+    });
+
+    return {
+      success: true,
+      builds: response.data.builds || [],
+    };
+  } catch (error) {
+    const errMessage = error.response
+      ? `Jenkins HTTP ${error.response.status}`
+      : error.message;
+
+    return {
+      success: false,
+      builds: [],
+      error: errMessage,
+    };
+  }
+};
+
+/**
  * Get Jenkins build execution status
  * @param {string} jobName Name of Jenkins job
  * @param {number} buildNumber Build number
@@ -154,6 +183,7 @@ const getJenkinsBuildLogs = async (jobName = 'cicd-deploy-pipeline', buildNumber
 
 module.exports = {
   triggerJenkinsJob,
+  getJenkinsJobBuilds,
   getJenkinsBuildStatus,
   getJenkinsBuildLogs,
 };

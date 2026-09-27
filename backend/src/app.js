@@ -4,7 +4,6 @@ const healthRoutes = require('./routes/healthRoutes');
 const authRoutes = require('./routes/authRoutes');
 const projectRoutes = require('./routes/projectRoutes');
 const deploymentRoutes = require('./routes/deploymentRoutes');
-const webhookRoutes = require('./routes/webhookRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
@@ -15,11 +14,12 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // API Routes
+// Note: GitHub triggers Jenkins directly (GitHub Push -> Jenkins /github-webhook/).
+// Express acts purely as the Data Collector, Project Manager, and Dashboard REST API.
 app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/deployments', deploymentRoutes);
-app.use('/api/webhooks', webhookRoutes);
 
 // 404 Route Handler
 app.use((req, res, next) => {

@@ -4,20 +4,21 @@ const DeploymentLog = require('../models/DeploymentLog');
 const Project = require('../models/Project');
 const jenkinsService = require('../services/jenkinsService');
 const mongoose = require('mongoose');
-const { inMemoryProjects, inMemoryDeployments, inMemoryBuilds, inMemoryLogs } = require('../utils/devStore');
+const { inMemoryProjects, inMemoryDeployments, inMemoryBuilds } = require('../utils/devStore');
 
 const isDbConnected = () => mongoose.connection.readyState === 1;
 
 /**
- * Helper to sync running build status and console logs from Jenkins API
+ * Helper to sync running build status and console logs from Jenkins API for a single build
  */
 const syncBuildStateWithJenkins = async (deployment, build, project) => {
   if (!deployment || deployment.status === 'SUCCESS' || deployment.status === 'FAILED') {
     return { deployment, build };
   }
 
+  const jobName = project?.jenkinsJobName || 'cicd-deploy-pipeline';
   const buildNumber = deployment.buildNumber || 1;
-  const jenkinsStatus = await jenkinsService.getJenkinsBuildStatus('cicd-deploy-pipeline', buildNumber);
+  const jenkinsStatus = await jenkinsService.getJenkinsBuildStatus(jobName, buildNumber);
 
   if (jenkinsStatus.success && !jenkinsStatus.building) {
     const finalStatus = jenkinsStatus.status; // 'SUCCESS' or 'FAILED'
@@ -26,7 +27,7 @@ const syncBuildStateWithJenkins = async (deployment, build, project) => {
     const durationSec = Math.round((completedAt.getTime() - startedAt.getTime()) / 1000);
 
     // Fetch real raw console logs from Jenkins
-    const logRes = await jenkinsService.getJenkinsBuildLogs('cicd-deploy-pipeline', buildNumber);
+    const logRes = await jenkinsService.getJenkinsBuildLogs(jobName, buildNumber);
     const realLogs = logRes.logs || `[Jenkins CI Engine] Build #${buildNumber} finished with status ${finalStatus}.`;
 
     if (isDbConnected()) {
@@ -74,13 +75,65 @@ const syncBuildStateWithJenkins = async (deployment, build, project) => {
   return { deployment, build };
 };
 
-// @desc    Trigger a manual or webhook CI build pipeline
+/**
+ * Helper to sync all builds for a project directly from Jenkins REST API
+ * (Handles builds triggered directly by GitHub push events to Jenkins)
+ */
+const syncAllProjectBuildsFromJenkins = async (project) => {
+  if (!project) return;
+  const jobName = project.jenkinsJobName || 'cicd-deploy-pipeline';
+  const jenkinsRes = await jenkinsService.getJenkinsJobBuilds(jobName);
+
+  if (!jenkinsRes.success || !jenkinsRes.builds || jenkinsRes.builds.length === 0) {
+    return;
+  }
+
+  for (const jBuild of jenkinsRes.builds) {
+    const buildNumber = jBuild.number;
+    const version = `v1.0.${buildNumber - 1}`;
+    const status = jBuild.building
+      ? 'RUNNING'
+      : jBuild.result === 'SUCCESS'
+      ? 'SUCCESS'
+      : 'FAILED';
+
+    if (isDbConnected()) {
+      let deployment = await Deployment.findOne({ project: project._id, buildNumber });
+      if (!deployment) {
+        deployment = await Deployment.create({
+          project: project._id,
+          version,
+          commitHash: 'git-push',
+          branch: project.branch || 'main',
+          status,
+          triggerType: 'WEBHOOK',
+          buildNumber,
+          startedAt: new Date(jBuild.timestamp || Date.now()),
+          duration: jBuild.duration ? Math.round(jBuild.duration / 1000) : 0,
+        });
+
+        const logRes = await jenkinsService.getJenkinsBuildLogs(jobName, buildNumber);
+        await Build.create({
+          deployment: deployment._id,
+          buildNumber,
+          status: status === 'RUNNING' ? 'IN_PROGRESS' : status,
+          logs: logRes.logs || `[Jenkins CI Engine] GitHub Push triggered Build #${buildNumber}`,
+          startedAt: deployment.startedAt,
+        });
+      } else {
+        let build = await Build.findOne({ deployment: deployment._id });
+        await syncBuildStateWithJenkins(deployment, build, project);
+      }
+    }
+  }
+};
+
+// @desc    Trigger a manual CI build pipeline
 // @route   POST /api/projects/:projectId/deploy
 // @access  Private (ADMIN, DEVELOPER)
 const triggerDeployment = async (req, res, next) => {
   try {
     const { projectId } = req.params;
-    const triggerType = req.body.triggerType || 'MANUAL';
 
     if (isDbConnected()) {
       const project = await Project.findById(projectId);
@@ -92,9 +145,10 @@ const triggerDeployment = async (req, res, next) => {
       const buildNumber = deploymentCount + 1;
       const version = `v1.0.${buildNumber - 1}`;
       const startedAt = new Date();
+      const jobName = project.jenkinsJobName || 'cicd-deploy-pipeline';
 
       // Trigger Jenkins CI Job via REST API
-      const jenkinsRes = await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+      const jenkinsRes = await jenkinsService.triggerJenkinsJob(jobName, {
         PROJECT_ID: project._id.toString(),
         PROJECT_NAME: project.name,
         REPO_URL: project.repositoryUrl,
@@ -120,7 +174,7 @@ const triggerDeployment = async (req, res, next) => {
         branch: project.branch || 'main',
         status: 'RUNNING',
         triggeredBy: req.user?.id,
-        triggerType,
+        triggerType: 'MANUAL',
         buildNumber,
         startedAt,
       });
@@ -140,7 +194,7 @@ const triggerDeployment = async (req, res, next) => {
       await DeploymentLog.create({
         deployment: deployment._id,
         action: 'TRIGGER_PIPELINE',
-        message: `CI Pipeline ${version} triggered via ${triggerType} by ${req.user?.name || 'System'}`,
+        message: `CI Pipeline ${version} triggered manually by ${req.user?.name || 'System'}`,
         user: req.user?.id,
       });
 
@@ -168,8 +222,9 @@ const triggerDeployment = async (req, res, next) => {
       const version = `v1.0.${buildNumber - 1}`;
       const startedAt = new Date().toISOString();
       const mockDepId = `dep_${Date.now()}`;
+      const jobName = project.jenkinsJobName || 'cicd-deploy-pipeline';
 
-      const jenkinsRes = await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+      const jenkinsRes = await jenkinsService.triggerJenkinsJob(jobName, {
         PROJECT_ID: projectId,
         PROJECT_NAME: project.name,
         REPO_URL: project.repositoryUrl,
@@ -196,7 +251,7 @@ const triggerDeployment = async (req, res, next) => {
         branch: project.branch || 'main',
         status: 'RUNNING',
         triggeredBy: req.user?.id,
-        triggerType,
+        triggerType: 'MANUAL',
         buildNumber,
         startedAt,
         createdAt: startedAt,
@@ -233,7 +288,7 @@ const triggerDeployment = async (req, res, next) => {
   }
 };
 
-// @desc    Get all CI deployments for a project
+// @desc    Get all CI deployments for a project (Syncs with Jenkins)
 // @route   GET /api/projects/:projectId/deployments
 // @access  Private
 const getProjectDeployments = async (req, res, next) => {
@@ -241,6 +296,11 @@ const getProjectDeployments = async (req, res, next) => {
     const { projectId } = req.params;
 
     if (isDbConnected()) {
+      const project = await Project.findById(projectId);
+      if (project) {
+        await syncAllProjectBuildsFromJenkins(project);
+      }
+
       const deployments = await Deployment.find({ project: projectId })
         .populate('triggeredBy', 'name email')
         .sort({ createdAt: -1 });
@@ -266,14 +326,19 @@ const getProjectDeployments = async (req, res, next) => {
   }
 };
 
-// @desc    Get all CI deployments platform-wide
+// @desc    Get all CI deployments platform-wide (Syncs with Jenkins)
 // @route   GET /api/deployments
 // @access  Private
 const getAllDeployments = async (req, res, next) => {
   try {
     if (isDbConnected()) {
+      const projects = await Project.find();
+      for (const proj of projects) {
+        await syncAllProjectBuildsFromJenkins(proj);
+      }
+
       const deployments = await Deployment.find()
-        .populate('project', 'name repositoryUrl port')
+        .populate('project', 'name repositoryUrl port jenkinsJobName')
         .populate('triggeredBy', 'name email')
         .sort({ createdAt: -1 });
 
@@ -307,7 +372,7 @@ const getDeploymentById = async (req, res, next) => {
 
     if (isDbConnected()) {
       let deployment = await Deployment.findById(id)
-        .populate('project', 'name repositoryUrl branch port dockerfilePath')
+        .populate('project', 'name repositoryUrl branch port dockerfilePath jenkinsJobName')
         .populate('triggeredBy', 'name email');
 
       if (!deployment) {
@@ -421,9 +486,10 @@ const rollbackDeployment = async (req, res, next) => {
       const newBuildNumber = deploymentCount + 1;
       const rollbackVersion = `${targetDeployment.version}-rebuild.${newBuildNumber}`;
       const startedAt = new Date();
+      const jobName = project.jenkinsJobName || 'cicd-deploy-pipeline';
 
       // Trigger Jenkins Re-build Pipeline
-      const jenkinsRes = await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+      const jenkinsRes = await jenkinsService.triggerJenkinsJob(jobName, {
         PROJECT_ID: project._id.toString(),
         PROJECT_NAME: project.name,
         REPO_URL: project.repositoryUrl,
@@ -498,8 +564,9 @@ const rollbackDeployment = async (req, res, next) => {
       const rollbackVersion = `${targetDeployment.version}-rebuild.${newBuildNumber}`;
       const mockDepId = `dep_${Date.now()}`;
       const startedAt = new Date().toISOString();
+      const jobName = project.jenkinsJobName || 'cicd-deploy-pipeline';
 
-      const jenkinsRes = await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+      const jenkinsRes = await jenkinsService.triggerJenkinsJob(jobName, {
         PROJECT_ID: targetDeployment.project,
         PROJECT_NAME: project.name,
         REPO_URL: project.repositoryUrl,
