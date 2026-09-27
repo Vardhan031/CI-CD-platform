@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+  </defs>
+  <!-- Background Card -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#0f172a" stroke="url(#grad)" stroke-width="3" />
+  
+  <!-- Terminal Prompt Icon -->
+  <path d="M18 22L28 32L18 42" stroke="#38bdf8" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+  <line x1="32" y1="42" x2="46" y2="42" stroke="#38bdf8" stroke-width="4.5" stroke-linecap="round" />
+</svg>

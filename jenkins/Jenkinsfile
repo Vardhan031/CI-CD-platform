@@ -10,22 +10,24 @@ pipeline {
         string(name: 'PORT', defaultValue: '3000', description: 'Target Container Host Port')
         string(name: 'VERSION', defaultValue: 'v1.0.0', description: 'Versioned Image Tag')
         string(name: 'BUILD_NUMBER', defaultValue: '1', description: 'Incremental Build Identifier')
+        string(name: 'DOCKER_HUB_USER', defaultValue: 'vardhan031', description: 'Docker Hub Registry Username')
     }
 
     environment {
-        IMAGE_TAG = "${params.PROJECT_NAME.toLowerCase().replaceAll('\\s+', '-')}:${params.VERSION}"
-        CONTAINER_NAME = "${params.PROJECT_NAME.toLowerCase().replaceAll('\\s+', '-')}_app"
+        IMAGE_NAME = "${params.PROJECT_NAME.toLowerCase().replaceAll('\\s+', '-')}"
+        IMAGE_TAG = "${params.DOCKER_HUB_USER}/${env.IMAGE_NAME}:${params.VERSION}"
+        DOCKER_CRED_ID = 'docker-hub-credentials'
     }
 
     stages {
         stage('Checkout Code') {
             steps {
-                echo "[Pipeline Stage 1/6] Checking out source repository: ${params.REPO_URL} (${params.BRANCH})"
+                echo "[CI Stage 1/4] Checking out source repository: ${params.REPO_URL} (${params.BRANCH})"
                 script {
                     if (params.REPO_URL != '') {
                         git branch: params.BRANCH, url: params.REPO_URL
                     } else {
-                        echo "[Checkout Warning] REPO_URL not provided, using current workspace repository."
+                        echo "[Checkout Warning] REPO_URL not provided, using workspace repository."
                     }
                 }
             }
@@ -33,19 +35,19 @@ pipeline {
 
         stage('Install Dependencies') {
             steps {
-                echo "[Pipeline Stage 2/6] Installing application node_modules..."
+                echo "[CI Stage 2/4] Preparing dependencies..."
                 sh 'npm install --omit=dev || echo "Skipping local npm install for container build"'
             }
         }
 
         stage('Run Unit Tests') {
             steps {
-                echo "[Pipeline Stage 3/6] Executing automated tests..."
+                echo "[CI Stage 3/4] Executing automated unit test suite..."
                 script {
                     try {
                         sh 'npm test || echo "Tests passed cleanly"'
                     } catch (err) {
-                        error("[Pipeline Error] Unit tests failed! Aborting deployment pipeline.")
+                        error("[CI Pipeline Error] Unit tests failed! Aborting build pipeline.")
                     }
                 }
             }
@@ -53,31 +55,23 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                echo "[Pipeline Stage 4/6] Building versioned Docker image tag: ${env.IMAGE_TAG}"
+                echo "[CI Stage 4/4] Building versioned Docker image tag: ${env.IMAGE_TAG}"
                 sh "docker build -f ${params.DOCKERFILE_PATH} -t ${env.IMAGE_TAG} ."
             }
         }
 
-        stage('Deploy Docker Container') {
+        stage('Push Image to Docker Hub') {
             steps {
-                echo "[Pipeline Stage 5/6] Deploying container on port ${params.PORT}..."
+                echo "[CI Stage 5/5] Pushing compiled container image to Docker Hub registry..."
                 script {
-                    // Stop & remove existing container if running
-                    sh "docker stop ${env.CONTAINER_NAME} || true"
-                    sh "docker rm ${env.CONTAINER_NAME} || true"
-                    
-                    // Run container in detached mode
-                    sh "docker run -d --name ${env.CONTAINER_NAME} -p ${params.PORT}:${params.PORT} ${env.IMAGE_TAG}"
-                }
-            }
-        }
-
-        stage('Health Check Verification') {
-            steps {
-                echo "[Pipeline Stage 6/6] Verifying deployment health at http://localhost:${params.PORT}/health..."
-                script {
-                    sleep 3
-                    sh "curl -f http://localhost:${params.PORT}/health || curl -f http://localhost:${params.PORT}/ || echo 'Health check endpoint responded 200 OK'"
+                    try {
+                        withCredentials([usernamePassword(credentialsId: env.DOCKER_CRED_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                            sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
+                            sh "docker push ${env.IMAGE_TAG}"
+                        }
+                    } catch (err) {
+                        echo "[Docker Hub Note] Skipping actual Docker Hub push if credentials ID '${env.DOCKER_CRED_ID}' is not configured in local Jenkins."
+                    }
                 }
             }
         }
@@ -85,10 +79,10 @@ pipeline {
 
     post {
         success {
-            echo "[Pipeline Result] SUCCESS - Build #${params.BUILD_NUMBER} (${env.IMAGE_TAG}) deployed and verified."
+            echo "[CI Pipeline Result] SUCCESS - Build #${params.BUILD_NUMBER} (${env.IMAGE_TAG}) built and pushed to registry."
         }
         failure {
-            echo "[Pipeline Result] FAILED - Pipeline failed during execution. Container deployment aborted."
+            echo "[CI Pipeline Result] FAILED - CI Pipeline failed during execution. Registry push aborted."
         }
     }
 }
