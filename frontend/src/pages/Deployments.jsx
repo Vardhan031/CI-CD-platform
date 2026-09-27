@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Rocket, Server, GitBranch, Clock, CheckCircle2, XCircle, Play, RotateCcw, Box } from 'lucide-react';
+import { Terminal, Server, GitBranch, Clock, CheckCircle2, XCircle, Loader2, Box } from 'lucide-react';
 import * as deploymentService from '../services/deploymentService';
 
 export default function Deployments() {
@@ -9,20 +9,43 @@ export default function Deployments() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const fetchDeployments = async () => {
+    let intervalId = null;
+
+    const fetchDeployments = async (showLoading = false) => {
       try {
-        setLoading(true);
+        if (showLoading) setLoading(true);
         const data = await deploymentService.getAllDeployments();
-        setDeployments(data.deployments || []);
+        const list = data.deployments || [];
+        setDeployments(list);
+
+        // Check if any build is currently QUEUED or RUNNING
+        const hasActiveBuild = list.some(
+          (d) => d.status === 'QUEUED' || d.status === 'RUNNING'
+        );
+
+        if (hasActiveBuild) {
+          if (!intervalId) {
+            intervalId = setInterval(() => {
+              fetchDeployments(false);
+            }, 3000);
+          }
+        } else if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
       } catch (err) {
-        console.error('Failed to fetch deployments:', err);
-        setError('Could not load deployment history');
+        console.error('Failed to fetch CI pipeline runs:', err);
+        setError('Could not load CI pipeline history');
       } finally {
-        setLoading(false);
+        if (showLoading) setLoading(false);
       }
     };
 
-    fetchDeployments();
+    fetchDeployments(true);
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
   }, []);
 
   return (
@@ -31,26 +54,27 @@ export default function Deployments() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-slate-900 via-slate-900 to-slate-800 p-6 rounded-2xl border border-slate-800 shadow-xl">
         <div>
           <h1 className="text-2xl font-bold text-slate-100 flex items-center space-x-2">
-            <Rocket className="text-cyan-400" />
-            <span>Deployment Pipelines History</span>
+            <Terminal className="text-cyan-400" />
+            <span>CI Pipeline Runs History</span>
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Track real-time build executions, container image versions, and pipeline logs.
+            Track real-time build executions, versioned container tags, and Jenkins console logs.
           </p>
         </div>
       </div>
 
       {/* Deployments List Table */}
       {loading ? (
-        <div className="p-12 text-center text-slate-400 text-sm font-mono">
-          Loading deployment pipeline records...
+        <div className="p-12 text-center text-slate-400 text-sm font-mono flex items-center justify-center space-x-2">
+          <Loader2 size={16} className="animate-spin text-cyan-400" />
+          <span>Loading CI pipeline records...</span>
         </div>
       ) : deployments.length === 0 ? (
         <div className="p-12 text-center bg-slate-900/40 border border-slate-800 rounded-2xl space-y-3">
           <Box className="w-12 h-12 text-slate-600 mx-auto" />
-          <h3 className="text-lg font-semibold text-slate-300">No Deployments Executed Yet</h3>
+          <h3 className="text-lg font-semibold text-slate-300">No CI Pipeline Runs Executed Yet</h3>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            Deployments triggered manually or via GitHub webhooks will automatically record build numbers and logs here.
+            CI builds triggered manually or via GitHub webhooks will automatically record build numbers and logs here.
           </p>
         </div>
       ) : (
@@ -70,60 +94,65 @@ export default function Deployments() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-mono text-xs">
-                {deployments.map((dep) => (
-                  <tr key={dep._id || dep.id} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-4 px-5 font-bold text-cyan-400">
-                      #{dep.buildNumber || 1}
-                    </td>
-                    <td className="py-4 px-5 font-sans font-semibold text-slate-100 flex items-center space-x-2">
-                      <Server size={15} className="text-slate-500" />
-                      <span>{dep.project?.name || 'NodeShop API'}</span>
-                    </td>
-                    <td className="py-4 px-5 text-emerald-400 font-bold">{dep.version}</td>
-                    <td className="py-4 px-5 text-slate-400">
-                      <span className="inline-flex items-center space-x-1.5">
-                        <GitBranch size={13} className="text-slate-500" />
-                        <span>{dep.branch}</span>
-                        <span className="text-slate-600">({dep.commitHash})</span>
-                      </span>
-                    </td>
-                    <td className="py-4 px-5">
-                      <span className={`px-2 py-0.5 rounded border text-[10px] ${
-                        dep.triggerType === 'WEBHOOK'
-                          ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
-                          : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                      }`}>
-                        {dep.triggerType}
-                      </span>
-                    </td>
-                    <td className="py-4 px-5">
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
-                          dep.status === 'SUCCESS'
-                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                            : dep.status === 'RUNNING'
-                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                            : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                        }`}
-                      >
-                        {dep.status}
-                      </span>
-                    </td>
-                    <td className="py-4 px-5 text-slate-400 flex items-center space-x-1">
-                      <Clock size={13} />
-                      <span>{dep.duration ? `${dep.duration}s` : '12s'}</span>
-                    </td>
-                    <td className="py-4 px-5 text-right font-sans">
-                      <Link
-                        to={`/deployments/${dep._id || dep.id}`}
-                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-semibold rounded-lg border border-slate-700 transition-colors inline-flex items-center space-x-1"
-                      >
-                        <span>View Logs</span>
-                        <span>→</span>
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
+                {deployments.map((dep) => {
+                  const isRunning = dep.status === 'QUEUED' || dep.status === 'RUNNING';
+
+                  return (
+                    <tr key={dep._id || dep.id} className="hover:bg-slate-800/30 transition-colors">
+                      <td className="py-4 px-5 font-bold text-cyan-400">
+                        #{dep.buildNumber || 1}
+                      </td>
+                      <td className="py-4 px-5 font-sans font-semibold text-slate-100 flex items-center space-x-2">
+                        <Server size={15} className="text-slate-500" />
+                        <span>{dep.project?.name || 'NodeShop API'}</span>
+                      </td>
+                      <td className="py-4 px-5 text-emerald-400 font-bold">{dep.version}</td>
+                      <td className="py-4 px-5 text-slate-400">
+                        <span className="inline-flex items-center space-x-1.5">
+                          <GitBranch size={13} className="text-slate-500" />
+                          <span>{dep.branch}</span>
+                          <span className="text-slate-600">({dep.commitHash})</span>
+                        </span>
+                      </td>
+                      <td className="py-4 px-5">
+                        <span className={`px-2 py-0.5 rounded border text-[10px] ${
+                          dep.triggerType === 'WEBHOOK'
+                            ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+                            : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                        }`}>
+                          {dep.triggerType}
+                        </span>
+                      </td>
+                      <td className="py-4 px-5">
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border flex items-center space-x-1 w-max ${
+                            dep.status === 'SUCCESS'
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                              : isRunning
+                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                              : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                          }`}
+                        >
+                          {isRunning && <Loader2 size={11} className="animate-spin" />}
+                          <span>{dep.status}</span>
+                        </span>
+                      </td>
+                      <td className="py-4 px-5 text-slate-400 flex items-center space-x-1">
+                        <Clock size={13} />
+                        <span>{dep.duration ? `${dep.duration}s` : '5s'}</span>
+                      </td>
+                      <td className="py-4 px-5 text-right font-sans">
+                        <Link
+                          to={`/deployments/${dep._id || dep.id}`}
+                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-semibold rounded-lg border border-slate-700 transition-colors inline-flex items-center space-x-1"
+                        >
+                          <span>View Logs</span>
+                          <span>→</span>
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

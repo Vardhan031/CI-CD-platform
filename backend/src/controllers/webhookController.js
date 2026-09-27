@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const Project = require('../models/Project');
 const Deployment = require('../models/Deployment');
 const Build = require('../models/Build');
@@ -8,8 +9,23 @@ const mongoose = require('mongoose');
 const isDbConnected = () => mongoose.connection.readyState === 1;
 
 /**
+ * Helper to verify GitHub Webhook HMAC SHA256 Signature
+ */
+const verifyGitHubSignature = (req) => {
+  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  if (!secret) return true; // Skip signature check if secret is not configured in env
+
+  const signature = req.headers['x-hub-signature-256'];
+  if (!signature) return false;
+
+  const hmac = crypto.createHmac('sha256', secret);
+  const digest = `sha256=${hmac.update(JSON.stringify(req.body)).digest('hex')}`;
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+};
+
+/**
  * GitHub Webhook Controller
- * Handles incoming push events from GitHub repositories to automate deployment pipelines
+ * Handles incoming push events from GitHub repositories to automate CI build pipelines
  * @route POST /api/webhooks/github
  * @access Public (GitHub Webhook Listener)
  */
@@ -22,6 +38,14 @@ const handleGitHubWebhook = async (req, res, next) => {
       return res.status(200).json({
         success: true,
         message: 'GitHub webhook ping received successfully',
+      });
+    }
+
+    // Verify HMAC signature if secret is present
+    if (!verifyGitHubSignature(req)) {
+      return res.status(401).json({
+        success: false,
+        message: 'GitHub Webhook signature verification failed: Invalid X-Hub-Signature-256',
       });
     }
 
@@ -43,8 +67,6 @@ const handleGitHubWebhook = async (req, res, next) => {
     console.log(`[GitHub Webhook Event] Push detected for Repo: ${repoUrl} | Branch: ${pushedBranch} | Commit: ${commitHash}`);
 
     if (isDbConnected()) {
-      // Find matching project in MongoDB
-      // Match by repository URL (flexible matching) and configured branch
       const projects = await Project.find();
       const project = projects.find(
         (p) =>
@@ -61,14 +83,13 @@ const handleGitHubWebhook = async (req, res, next) => {
         });
       }
 
-      // Calculate build number & version
       const deploymentCount = await Deployment.countDocuments({ project: project._id });
       const buildNumber = deploymentCount + 1;
       const version = `v1.0.${buildNumber - 1}`;
       const startedAt = new Date();
 
       // Trigger Jenkins Pipeline
-      await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+      const jenkinsRes = await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
         PROJECT_ID: project._id.toString(),
         PROJECT_NAME: project.name,
         REPO_URL: project.repositoryUrl,
@@ -78,7 +99,15 @@ const handleGitHubWebhook = async (req, res, next) => {
         VERSION: version,
         BUILD_NUMBER: buildNumber,
         COMMIT_HASH: commitHash,
+        DOCKER_HUB_USER: process.env.DOCKER_HUB_USER || 'vardhan031',
       });
+
+      if (!jenkinsRes.success) {
+        return res.status(500).json({
+          success: false,
+          message: jenkinsRes.message || 'Failed to trigger Jenkins CI job via Webhook',
+        });
+      }
 
       // Create Deployment Record
       const deployment = await Deployment.create({
@@ -86,41 +115,40 @@ const handleGitHubWebhook = async (req, res, next) => {
         version,
         commitHash,
         branch: pushedBranch,
-        status: 'SUCCESS',
+        status: 'RUNNING',
         triggerType: 'WEBHOOK',
         buildNumber,
         startedAt,
-        completedAt: new Date(startedAt.getTime() + 12000),
-        duration: 12,
       });
 
-      // Create Build Log
       const logs = `[GitHub Webhook Listener] Received push event from GitHub for branch '${pushedBranch}'
 [Commit] Hash: ${commitHash} - Message: "${commitMessage}"
-[Jenkins Engine] Pipeline triggered for ${project.name} (Version: ${version})
-[Build Result] SUCCESS - Container deployed on port ${project.port}`;
+[Jenkins CI Engine] Pipeline triggered for ${project.name} (Version: ${version})
+[Status] Build execution in progress on Jenkins server...`;
 
       await Build.create({
         deployment: deployment._id,
         buildNumber,
-        status: 'SUCCESS',
+        status: 'IN_PROGRESS',
         logs,
         startedAt,
-        completedAt: deployment.completedAt,
       });
 
-      // Update Project Status & Active Version
-      project.status = 'DEPLOYED';
-      project.currentVersion = version;
+      await DeploymentLog.create({
+        deployment: deployment._id,
+        action: 'WEBHOOK_TRIGGER',
+        message: `CI Pipeline ${version} triggered via GitHub Webhook push to ${pushedBranch}`,
+      });
+
+      project.status = 'BUILDING';
       await project.save();
 
       return res.status(200).json({
         success: true,
-        message: `GitHub Webhook triggered deployment ${version} for project "${project.name}"`,
+        message: `GitHub Webhook triggered CI build pipeline ${version} for project "${project.name}"`,
         deployment,
       });
     } else {
-      // In-Memory Fallback Dev Mode
       const { inMemoryProjects, inMemoryDeployments, inMemoryBuilds } = require('../utils/devStore');
 
       const projectsList = Array.from(inMemoryProjects.values());
@@ -144,8 +172,9 @@ const handleGitHubWebhook = async (req, res, next) => {
       const buildNumber = existingDeployments.length + 1;
       const version = `v1.0.${buildNumber - 1}`;
       const mockDepId = `dep_${Date.now()}`;
+      const startedAt = new Date().toISOString();
 
-      await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
+      const jenkinsRes = await jenkinsService.triggerJenkinsJob('cicd-deploy-pipeline', {
         PROJECT_ID: project._id || project.id,
         PROJECT_NAME: project.name,
         REPO_URL: project.repositoryUrl,
@@ -153,7 +182,15 @@ const handleGitHubWebhook = async (req, res, next) => {
         PORT: project.port,
         VERSION: version,
         BUILD_NUMBER: buildNumber,
+        DOCKER_HUB_USER: process.env.DOCKER_HUB_USER || 'vardhan031',
       });
+
+      if (!jenkinsRes.success) {
+        return res.status(500).json({
+          success: false,
+          message: jenkinsRes.message || 'Failed to trigger Jenkins CI job via Webhook',
+        });
+      }
 
       const mockDeployment = {
         _id: mockDepId,
@@ -162,37 +199,36 @@ const handleGitHubWebhook = async (req, res, next) => {
         version,
         commitHash,
         branch: pushedBranch,
-        status: 'SUCCESS',
+        status: 'RUNNING',
         triggerType: 'WEBHOOK',
         buildNumber,
-        startedAt: new Date().toISOString(),
-        duration: 12,
-        createdAt: new Date().toISOString(),
+        startedAt,
+        createdAt: startedAt,
       };
 
       const logs = `[GitHub Webhook Listener] Push event received for branch '${pushedBranch}'
 [Commit] Hash: ${commitHash} - Message: "${commitMessage}"
-[Jenkins Engine] Pipeline triggered for ${project.name} (${version})
-[Build Result] SUCCESS - Container deployed on port ${project.port}`;
+[Jenkins CI Engine] Pipeline triggered for ${project.name} (${version})
+[Status] Build execution in progress on Jenkins server...`;
 
       const mockBuild = {
         _id: `build_${Date.now()}`,
         deployment: mockDepId,
         buildNumber,
-        status: 'SUCCESS',
+        status: 'IN_PROGRESS',
         logs,
+        startedAt,
       };
 
       inMemoryDeployments.set(mockDepId, mockDeployment);
       inMemoryBuilds.set(mockDepId, mockBuild);
 
-      project.status = 'DEPLOYED';
-      project.currentVersion = version;
+      project.status = 'BUILDING';
       inMemoryProjects.set(project._id || project.id, project);
 
       return res.status(200).json({
         success: true,
-        message: `GitHub Webhook triggered deployment ${version} for project "${project.name}" (In-Memory Dev Mode)`,
+        message: `GitHub Webhook triggered CI pipeline ${version} for project "${project.name}" (In-Memory Dev Mode)`,
         deployment: mockDeployment,
       });
     }
